@@ -7,7 +7,6 @@ const MONTHS = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 
 const MTH = { January: 'ม.ค.', February: 'ก.พ.', March: 'มี.ค.', April: 'เม.ย.', May: 'พ.ค.', June: 'มิ.ย.', July: 'ก.ค.', August: 'ส.ค.', September: 'ก.ย.', October: 'ต.ค.', November: 'พ.ย.', December: 'ธ.ค.' };
 const COLORS = ['#3b82f6', '#6366f1', '#22c55e', '#f59e0b', '#ef4444', '#06b6d4', '#ec4899', '#8b5cf6', '#14b8a6', '#f97316'];
 let DATA = null, currentPage = 0;
-let TRIPS_DATA = [];
 
 // Helpers for multi-month readiness
 function getActiveMonths(data, key) {
@@ -44,7 +43,6 @@ const mapCustomer = name => CUSTOMER_ALIAS[name] ?? name;
 
 // Sortable+Searchable table engine
 let tableStates = {};
-const TABLE_DRAWER_CONFIGS = {};
 function mkTable(id, cols, data, opts = {}) {
   let s = tableStates[id];
   if (!s || !opts._restore) {
@@ -73,18 +71,18 @@ function mkTable(id, cols, data, opts = {}) {
           style="flex:1;min-width:180px;padding:8px 12px;background:var(--surface);border:1px solid var(--border);border-radius:8px;color:var(--text);font-size:13px">
         <span style="font-size:12px;color:var(--muted)">${fmt(total)} รายการ | หน้า ${s.page + 1}/${pages || 1}</span>
         <div style="display:flex;gap:4px">
-          <button onclick="tblPage('${id}',-1)" style="${btnSt}">&#8249;</button>
-          <button onclick="tblPage('${id}',1)" style="${btnSt}">&#8250;</button>
+          <button onclick="tblPage('${id}',-1)" style="${btnSt}">‹</button>
+          <button onclick="tblPage('${id}',1)" style="${btnSt}">›</button>
         </div>
         <select id="${id}_pp" style="padding:6px 8px;background:var(--surface);border:1px solid var(--border);border-radius:6px;color:var(--text);font-size:12px">
           ${[25, 50, 100, 250, 500].map(v => `<option value="${v}"${v === s.perPage ? ' selected' : ''}>${v} แถว</option>`).join('')}
         </select>
       </div>
-      <div class="table-wrap"><table><thead><tr>${cols.map((c, i) => `<th onclick="tblSort('${id}',${i})" style="cursor:pointer;user-select:none">${esc(c)}${s.col === i ? (s.asc ? ' &#9650;' : ' &#9660;') : ''}</th>`).join('')}</tr></thead>
+      <div class="table-wrap"><table><thead><tr>${cols.map((c, i) => `<th onclick="tblSort('${id}',${i})" style="cursor:pointer;user-select:none">${esc(c)}${s.col === i ? (s.asc ? ' ▲' : ' ▼') : ''}</th>`).join('')}</tr></thead>
       <tbody>${pd.map((r, ri) => `<tr>${r.map((v, ci) => {
-      if (typeof v === 'number') { return `<td class="${v < -0.01 ? 'negative' : v > 0.01 ? 'positive' : ''}">${fmt(v)}</td>`; }
-      if (typeof v === 'string' && v.startsWith('<')) { return `<td>${v}</td>`; }
-      return `<td>${esc(v)}</td>`;
+      if (typeof v === 'number') { return `<td class="${v < 0 ? 'negative' : v > 0 ? 'positive' : ''}">${fmt(v)}</td>` }
+      if (typeof v === 'string' && v.startsWith('<')) { return `<td>${v}</td>` }
+      return `<td>${esc(v)}</td>`
     }).join('')}</tr>`).join('')}</tbody></table></div>`;
     const inp = document.getElementById(id + '_q');
     if (inp) {
@@ -111,153 +109,6 @@ function tblPage(id, d) {
   mkTable(id, s._cols, s._data, { _restore: true });
 }
 
-// ─── Row Detail Drawer Engine ───
-function _ensureDrawerDOM() {
-  if (document.getElementById('rowDrawerOverlay')) return;
-  const ov = document.createElement('div');
-  ov.id = 'rowDrawerOverlay';
-  ov.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.55);z-index:9000;display:none;backdrop-filter:blur(3px);transition:opacity .25s';
-  ov.onclick = closeRowDrawer;
-  const panel = document.createElement('div');
-  panel.id = 'rowDrawerPanel';
-  panel.style.cssText = 'position:fixed;top:0;right:-560px;width:min(540px,96vw);height:100vh;background:var(--card);border-left:1px solid var(--border);z-index:9001;display:flex;flex-direction:column;box-shadow:-8px 0 40px rgba(0,0,0,0.5);transition:right .3s cubic-bezier(.4,0,.2,1)';
-  panel.innerHTML = '<div id="rowDrawerContent" style="flex:1;overflow:hidden;display:flex;flex-direction:column"></div>';
-  document.body.appendChild(ov);
-  document.body.appendChild(panel);
-  document.addEventListener('keydown', e => { if (e.key === 'Escape') closeRowDrawer(); });
-}
-
-function closeRowDrawer() {
-  const panel = document.getElementById('rowDrawerPanel');
-  const ov = document.getElementById('rowDrawerOverlay');
-  if (!panel) return;
-  panel.style.right = '-560px';
-  if (ov) { ov.style.opacity = '0'; setTimeout(() => { ov.style.display = 'none'; }, 280); }
-  document.querySelectorAll('.tbl-row-clickable.drawer-active').forEach(r => r.classList.remove('drawer-active'));
-}
-
-function openRowDrawer(tableId, absIdx) {
-  _ensureDrawerDOM();
-  const s = tableStates[tableId];
-  const cfg = TABLE_DRAWER_CONFIGS[tableId] || {};
-  if (!s || !s._data) return;
-  // Re-sort data the same way the table displays it
-  const q = (s.filter || '').toLowerCase();
-  let fd = s._data.filter(r => !q || s._cols.some((_, i) => String(r[i] || '').toLowerCase().includes(q)));
-  if (s.col != null) {
-    fd.sort((a, b) => {
-      const av = a[s.col], bv = b[s.col];
-      const isNum = typeof av === 'number' && typeof bv === 'number';
-      const res = isNum ? (av - bv) : String(av || '').localeCompare(String(bv || ''));
-      return s.asc ? res : -res;
-    });
-  }
-  const row = fd[absIdx];
-  if (!row) return;
-  // Clear previous active
-  document.querySelectorAll('.tbl-row-clickable.drawer-active').forEach(r => r.classList.remove('drawer-active'));
-  const accentColor = cfg.accentColor || '#3b82f6';
-  const title = cfg.getTitle ? cfg.getTitle(row, s._cols) : String(row[0] || 'รายละเอียด').substring(0, 60);
-  const subtitle = cfg.getSubtitle ? cfg.getSubtitle(row, s._cols) : (s._cols[1] && row[1] ? String(row[1]).substring(0, 80) : '');
-  // Build field cards
-  let fieldsHtml = '<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;padding:16px 20px">';
-  s._cols.forEach((colName, i) => {
-    const val = row[i];
-    const fmtVal = typeof val === 'number' ? fmt(val) : esc(String(val != null ? val : '-'));
-    const vColor = typeof val === 'number' && val < -0.01 ? '#ef4444' : typeof val === 'number' && val > 0.01 ? '#22c55e' : 'var(--text)';
-    const spanStyle = (cfg.spanCols && cfg.spanCols.includes(colName)) ? 'grid-column:span 2;' : '';
-    fieldsHtml += '<div style="background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:12px 14px;' + spanStyle + '">';
-    fieldsHtml += '<div style="font-size:10px;color:var(--muted);margin-bottom:4px;text-transform:uppercase;letter-spacing:.4px">' + esc(colName) + '</div>';
-    fieldsHtml += '<div style="font-size:14px;font-weight:700;color:' + vColor + ';word-break:break-word">' + fmtVal + '</div>';
-    fieldsHtml += '</div>';
-  });
-  fieldsHtml += '</div>';
-  // Inner related-rows table
-  const filterColIdx = cfg.innerFilterColIndex != null ? cfg.innerFilterColIndex : 0;
-  const keyVal = String(row[filterColIdx] || '');
-  const related = s._data.filter(r => String(r[filterColIdx] || '') === keyVal);
-  let innerHtml = '';
-  if (related.length > 1) {
-    innerHtml = '<div style="border-top:1px solid var(--border);flex-shrink:0">';
-    innerHtml += '<div style="padding:10px 20px 4px;display:flex;justify-content:space-between;align-items:center">';
-    innerHtml += '<span style="font-size:10px;font-weight:700;color:' + accentColor + ';text-transform:uppercase;letter-spacing:.8px">รายการที่เกี่ยวข้อง</span>';
-    innerHtml += '<span style="font-size:11px;color:var(--muted)">' + related.length + ' รายการ</span>';
-    innerHtml += '</div>';
-    innerHtml += '<div style="padding:0 12px 6px;display:flex;gap:6px">';
-    innerHtml += '<input id="dInQ" type="text" placeholder="ค้นหา..." style="flex:1;padding:5px 10px;background:var(--bg);border:1px solid var(--border);border-radius:6px;color:var(--text);font-size:11px">';
-    innerHtml += '<select id="dInSort" style="padding:4px 8px;background:var(--bg);border:1px solid var(--border);border-radius:6px;color:var(--text);font-size:11px">';
-    s._cols.forEach((c, ci) => { innerHtml += '<option value="' + ci + '">' + esc(c) + '</option>'; });
-    innerHtml += '</select>';
-    innerHtml += '</div>';
-    innerHtml += '<div id="dInTable" style="overflow:auto;max-height:200px;margin:0 12px 12px;border:1px solid var(--border);border-radius:8px"></div>';
-    innerHtml += '</div>';
-  }
-  // Compose panel
-  const drawerContent = document.getElementById('rowDrawerContent');
-  let panelHtml = '';
-  panelHtml += '<div style="display:flex;align-items:center;gap:12px;padding:14px 20px;border-bottom:1px solid var(--border);flex-shrink:0;background:linear-gradient(135deg,' + accentColor + '12,transparent)">';
-  panelHtml += '<div style="flex:1;min-width:0">';
-  panelHtml += '<div style="font-size:15px;font-weight:800;color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">' + esc(title) + '</div>';
-  if (subtitle) panelHtml += '<div style="font-size:11px;color:var(--muted);margin-top:2px">' + esc(subtitle) + '</div>';
-  panelHtml += '</div>';
-  panelHtml += '<button onclick="closeRowDrawer()" style="flex-shrink:0;background:transparent;border:1px solid var(--border);border-radius:8px;color:var(--muted);width:32px;height:32px;cursor:pointer;font-size:16px;line-height:1" onmouseover="this.style.borderColor=\'#ef4444\';this.style.color=\'#ef4444\'" onmouseout="this.style.borderColor=\'var(--border)\';this.style.color=\'var(--muted)\'">&#215;</button>';
-  panelHtml += '</div>';
-  panelHtml += '<div style="flex:1;overflow-y:auto;min-height:0">' + fieldsHtml + '</div>';
-  panelHtml += innerHtml;
-  panelHtml += '<div style="padding:10px 20px;border-top:1px solid var(--border);flex-shrink:0;display:flex;justify-content:flex-end">';
-  panelHtml += '<button onclick="closeRowDrawer()" style="padding:7px 20px;background:var(--surface);border:1px solid var(--border);border-radius:8px;color:var(--text);cursor:pointer;font-size:13px">ปิด Panel</button>';
-  panelHtml += '</div>';
-  drawerContent.innerHTML = panelHtml;
-  // Wire inner filter table
-  if (related.length > 1) {
-    let innerFilter = '', innerSortCol = filterColIdx, innerAsc = false;
-    function renderInnerTable() {
-      const iq = innerFilter.toLowerCase();
-      let ifd = related.filter(r => !iq || s._cols.some((_, i) => String(r[i] || '').toLowerCase().includes(iq)));
-      ifd.sort((a, b) => {
-        const av = a[innerSortCol], bv = b[innerSortCol];
-        const isN = typeof av === 'number' && typeof bv === 'number';
-        const res = isN ? av - bv : String(av || '').localeCompare(String(bv || ''));
-        return innerAsc ? res : -res;
-      });
-      const tEl = document.getElementById('dInTable');
-      if (!tEl) return;
-      let tHtml = '<table style="width:100%;border-collapse:collapse;font-size:11px">';
-      tHtml += '<thead style="position:sticky;top:0;background:var(--surface)"><tr>';
-      s._cols.forEach((c, ci) => {
-        const align = ci > 0 ? 'right' : 'left';
-        const arrow = innerSortCol === ci ? (innerAsc ? '&#9650;' : '&#9660;') : '';
-        tHtml += '<th onclick="_dInSort(' + ci + ')" style="padding:5px 8px;text-align:' + align + ';cursor:pointer;color:var(--muted);white-space:nowrap">' + esc(c) + arrow + '</th>';
-      });
-      tHtml += '</tr></thead><tbody>';
-      ifd.forEach(r => {
-        tHtml += '<tr style="border-bottom:1px solid var(--border)">';
-        r.forEach((v, ci) => {
-          const vc = typeof v === 'number' && v < -0.01 ? '#ef4444' : typeof v === 'number' && v > 0.01 ? '#22c55e' : 'var(--text)';
-          const align = ci > 0 ? 'right' : 'left';
-          const fw = typeof v === 'number' ? 600 : 400;
-          const display = typeof v === 'number' ? fmt(v) : esc(String(v != null ? v : '-'));
-          tHtml += '<td style="padding:4px 8px;text-align:' + align + ';color:' + vc + ';font-weight:' + fw + '">' + display + '</td>';
-        });
-        tHtml += '</tr>';
-      });
-      tHtml += '</tbody></table>';
-      tEl.innerHTML = tHtml;
-    }
-    window._dInSort = function(ci) { if (innerSortCol === ci) innerAsc = !innerAsc; else { innerSortCol = ci; innerAsc = false; } renderInnerTable(); };
-    const qEl = document.getElementById('dInQ');
-    const sEl = document.getElementById('dInSort');
-    if (qEl) qEl.addEventListener('input', function(e) { innerFilter = e.target.value; renderInnerTable(); });
-    if (sEl) sEl.addEventListener('change', function(e) { innerSortCol = +e.target.value; innerAsc = false; renderInnerTable(); });
-    renderInnerTable();
-  }
-  // Animate open
-  const ov = document.getElementById('rowDrawerOverlay');
-  const panel = document.getElementById('rowDrawerPanel');
-  ov.style.display = 'block';
-  ov.style.opacity = '0';
-  requestAnimationFrame(function() { ov.style.opacity = '1'; panel.style.right = '0'; });
-}
 
 // KPI card
 const kpi = (label, val, cls = '', sub = '') => `<div class="kpi"><div class="kpi-label">${label}</div><div class="kpi-value ${cls}">${val}</div>${sub ? `<div class="kpi-sub">${sub}</div>` : ''}</div>`;
@@ -327,7 +178,7 @@ function buildRanking(d) {
     <div class="table-card" style="margin-bottom:0"><div class="table-card-header"><h3>จัดอันดับเส้นทางกำไรสูงสุด</h3></div><div id="t_top"></div></div>
     <div class="table-card" style="margin-bottom:0"><div class="table-card-header"><h3>จัดอันดับเส้นทางขาดทุนสูงสุด</h3></div><div id="t_bot"></div></div>
   </div>`;
-  setTimeout(() => { mkTable('t_top', cols, mkRows(rk.top.slice(0, 10)), { defaultSort: 4, defaultAsc: false }); mkTable('t_bot', cols, mkRows(rk.bottom.slice(0, 10)), { defaultSort: 4, defaultAsc: true }); }, 0);
+  setTimeout(() => { mkTable('t_top', cols, mkRows(rk.top), { defaultSort: 4, defaultAsc: false }); mkTable('t_bot', cols, mkRows(rk.bottom), { defaultSort: 4, defaultAsc: true }); }, 0);
   return h;
 }
 
@@ -621,17 +472,13 @@ function buildFullTrend(d) {
         <div class="modal-table-wrap" style="overflow:visible;">
           <table style="font-size:10px;">
             <thead><tr><th style="padding:6px 4px;">ลูกค้า</th><th style="padding:6px 4px;">ประเภทรถ</th><th style="padding:6px 4px;">เส้นทาง</th><th style="text-align:right;padding:6px 4px;">จำนวนเที่ยวรวม</th>${MONTHS.map(m => `<th style="text-align:right;padding:6px 4px;">${MTH[m] || m}</th>`).join('')}<th style="text-align:right;padding:6px 4px;">ส่วนต่างรวม</th></tr></thead>
-            <tbody>${(() => {
-  tableStates['m_trend'] = { col: null, asc: false, filter: '', page: 0, perPage: 9999, _cols: ['ลูกค้า', 'ประเภทรถ', 'เส้นทาง', 'เที่ยวรวม', ...MONTHS.map(m=>MTH[m]||m), 'ส่วนต่างรวม'], _data: top10.map(x => [x.customer, x.vtype||'-', x.route, monthsToShow.reduce((a,m)=>a+(x.months[m]?.trips||0),0), ...MONTHS.map(m=>x.months[m]?.trips||0), monthsToShow.reduce((a,m)=>a+(x.months[m]?.margin||0),0)]) };
-  TABLE_DRAWER_CONFIGS['m_trend'] = { accentColor: '#3b82f6', getTitle: r=>String(r[2]), innerFilterColIndex: 2 };
-  return top10.map((r, _idx) => {
+            <tbody>${top10.map(r => {
               const tot = monthsToShow.reduce((a,m) => a + (r.months[m]?.trips||0), 0);
               const mg = monthsToShow.reduce((a,m) => a + (r.months[m]?.margin||0), 0);
-              return `<tr class="tbl-row-clickable" onclick="openRowDrawer('m_trend', ${_idx})"><td style="padding:5px 4px;">${esc(r.customer)}</td><td style="padding:5px 4px;">${esc(r.vtype||'-')}</td><td style="padding:5px 4px;">${esc(r.route)}</td><td style="text-align:right;font-weight:700;padding:5px 4px;">${fmt(tot)}</td>
+              return `<tr><td style="padding:5px 4px;">${esc(r.customer)}</td><td style="padding:5px 4px;">${esc(r.vtype||'-')}</td><td style="padding:5px 4px;">${esc(r.route)}</td><td style="text-align:right;font-weight:700;padding:5px 4px;">${fmt(tot)}</td>
               ${MONTHS.map(m => `<td style="text-align:right;padding:5px 4px;">${fmt(r.months[m]?.trips||0)}</td>`).join('')}
               <td style="text-align:right;color:${mg>=0?'#22c55e':'#ef4444'};font-weight:700;padding:5px 4px;">${fmt(mg)}</td></tr>`;
-            }).join('');
-})()}</tbody>
+            }).join('')}</tbody>
           </table>
         </div>
       </div>
@@ -654,8 +501,7 @@ function buildFullTrend(d) {
               const pct = recv > 0 ? ((margin/recv)*100).toFixed(2) + '%' : '-';
               return `<tr><td style="font-weight:700">${MTH[m]||m}</td><td style="text-align:right">${fmt(trips)}</td><td style="text-align:right">${fmt(recv)}</td>
               <td style="text-align:right;color:${margin>=0?'#22c55e':'#ef4444'};font-weight:700">${fmt(margin)}</td><td style="text-align:right">${pct}</td></tr>`;
-            }).join('');
-})()}</tbody>
+            }).join('')}</tbody>
           </table>
         </div>
       </div>
@@ -665,15 +511,15 @@ function buildFullTrend(d) {
 
 function buildFullRanking(d) {
   const rk = d.routeRanking;
-  const allRoutes = [...rk.top, ...rk.bottom, ...(rk.zero || [])].sort((a, b) => b.margin - a.margin);
+  const allRoutes = [...rk.top, ...rk.bottom].sort((a, b) => b.margin - a.margin);
   const top10 = rk.top.slice(0, 10);
   const bot10 = rk.bottom.slice(0, 10);
 
   // Profitability stats from available data
-  const allMargins = [...rk.top.map(r => r.margin), ...rk.bottom.map(r => r.margin), ...(rk.zero || []).map(r => r.margin)].filter(m => m != null);
-  const profitCount = rk.top.filter(r => (r.margin || 0) > 0.01).length;
-  const lossCount = rk.bottom.filter(r => (r.margin || 0) < -0.01).length;
-  const zeroCount = (rk.zero && rk.zero.length) || 0;
+  const allMargins = [...rk.top.map(r => r.margin), ...rk.bottom.map(r => r.margin)].filter(m => m != null);
+  const profitCount = rk.top.filter(r => (r.margin || 0) > 0).length;
+  const lossCount = rk.bottom.filter(r => (r.margin || 0) < 0).length;
+  const zeroCount = rk.top.filter(r => (r.margin || 0) === 0).length + rk.bottom.filter(r => (r.margin || 0) === 0).length;
   const totalRoutes = profitCount + lossCount + zeroCount;
   const profitPct = totalRoutes > 0 ? (profitCount / totalRoutes * 100).toFixed(1) : '0.0';
   const lossPct = totalRoutes > 0 ? (lossCount / totalRoutes * 100).toFixed(1) : '0.0';
@@ -776,14 +622,10 @@ function buildFullRanking(d) {
         <div class="modal-table-wrap">
           <table>
             <thead><tr><th>อันดับ</th><th>ลูกค้า</th><th>เส้นทาง</th><th style="text-align:right">เที่ยว</th><th style="text-align:right">ส่วนต่างรวม</th><th style="text-align:right">ส่วนต่าง/เที่ยว</th><th style="text-align:right">กำไร %</th></tr></thead>
-            <tbody>${(() => {
-  tableStates['m_rank_top'] = { col: null, asc: false, filter: '', page: 0, perPage: 9999, _cols: ['อันดับ', 'ลูกค้า', 'เส้นทาง', 'เที่ยว', 'ส่วนต่างรวม', 'ส่วนต่าง/เที่ยว', 'กำไร %'], _data: top10.map((x,i) => [i+1, x.customer, x.route, x.trips, x.margin, x.avgMargin, x.pct]) };
-  TABLE_DRAWER_CONFIGS['m_rank_top'] = { accentColor: '#22c55e', getTitle: r=>String(r[2]), innerFilterColIndex: 2 };
-  return top10.map((r, i) => `<tr class="tbl-row-clickable" onclick="openRowDrawer('m_rank_top', ${i})">
+            <tbody>${top10.map((r, i) => `<tr>
               <td><span style="display:inline-flex;align-items:center;justify-content:center;width:24px;height:24px;border-radius:6px;background:#22c55e15;color:#22c55e;font-size:11px;font-weight:800;">${i+1}</span></td>
               <td>${esc(r.customer)}</td><td>${esc(r.route)}</td><td style="text-align:right">${fmt(r.trips)}</td>
-              <td style="text-align:right;color:#22c55e;font-weight:700">${fmt(r.margin)}</td><td style="text-align:right">${fmt(r.avgMargin)}</td><td style="text-align:right">${fmtP(r.pct)}</td></tr>`).join('');
-})()}</tbody>
+              <td style="text-align:right;color:#22c55e;font-weight:700">${fmt(r.margin)}</td><td style="text-align:right">${fmt(r.avgMargin)}</td><td style="text-align:right">${fmtP(r.pct)}</td></tr>`).join('')}</tbody>
           </table>
         </div>
       </div>
@@ -799,14 +641,10 @@ function buildFullRanking(d) {
         <div class="modal-table-wrap">
           <table>
             <thead><tr><th>อันดับ</th><th>ลูกค้า</th><th>เส้นทาง</th><th style="text-align:right">เที่ยว</th><th style="text-align:right">ส่วนต่างรวม</th><th style="text-align:right">ส่วนต่าง/เที่ยว</th><th style="text-align:right">กำไร %</th></tr></thead>
-            <tbody>${(() => {
-  tableStates['m_rank_bot'] = { col: null, asc: false, filter: '', page: 0, perPage: 9999, _cols: ['อันดับ', 'ลูกค้า', 'เส้นทาง', 'เที่ยว', 'ส่วนต่างรวม', 'ส่วนต่าง/เที่ยว', 'กำไร %'], _data: bot10.map((x,i) => [i+1, x.customer, x.route, x.trips, x.margin, x.avgMargin, x.pct]) };
-  TABLE_DRAWER_CONFIGS['m_rank_bot'] = { accentColor: '#ef4444', getTitle: r=>String(r[2]), innerFilterColIndex: 2 };
-  return bot10.map((r, i) => `<tr class="tbl-row-clickable" onclick="openRowDrawer('m_rank_bot', ${i})">
+            <tbody>${bot10.map((r, i) => `<tr>
               <td><span style="display:inline-flex;align-items:center;justify-content:center;width:24px;height:24px;border-radius:6px;background:#ef444415;color:#ef4444;font-size:11px;font-weight:800;">${i+1}</span></td>
               <td>${esc(r.customer)}</td><td>${esc(r.route)}</td><td style="text-align:right">${fmt(r.trips)}</td>
-              <td style="text-align:right;color:#ef4444;font-weight:700">${fmt(r.margin)}</td><td style="text-align:right">${fmt(r.avgMargin)}</td><td style="text-align:right">${fmtP(r.pct)}</td></tr>`).join('');
-})()}</tbody>
+              <td style="text-align:right;color:#ef4444;font-weight:700">${fmt(r.margin)}</td><td style="text-align:right">${fmt(r.avgMargin)}</td><td style="text-align:right">${fmtP(r.pct)}</td></tr>`).join('')}</tbody>
           </table>
         </div>
       </div>
@@ -1018,8 +856,7 @@ function buildFullLoss(d) {
               const pct = lt.total > 0 ? ((bm.count/lt.total)*100).toFixed(1) + '%' : '-';
               const avg = bm.count > 0 ? fmt(Math.round(Math.abs(bm.loss)/bm.count)) + ' THB' : '-';
               return `<tr><td style="font-weight:700">${MTH[m]||m}</td><td style="text-align:right;color:#ef4444;font-weight:700">${fmt(bm.count)}</td><td style="text-align:right;color:#ef4444;font-weight:700">${fmt(bm.loss)}</td><td style="text-align:right">${pct}</td><td style="text-align:right">${avg}</td></tr>`;
-            }).join('');
-})()}</tbody>
+            }).join('')}</tbody>
           </table>
         </div>
       </div>
@@ -1178,8 +1015,7 @@ function buildTrendCard(d) {
         const tot = MONTHS.reduce((a,m) => a + (r.months[m]?.trips||0), 0);
         const mg = MONTHS.reduce((a,m) => a + (r.months[m]?.margin||0), 0);
         return `<tr><td>${esc(r.customer)}</td><td title="${esc(r.route)}">${esc(r.route.length>20?r.route.slice(0,20)+'...':r.route)}</td><td style="text-align:right">${fmt(tot)}</td><td style="text-align:right;color:${mg>=0?'#22c55e':'#ef4444'}">${fmt(mg)}</td></tr>`;
-      }).join('');
-})()}</tbody>
+      }).join('')}</tbody>
     </table>
   `;
 }
@@ -1474,7 +1310,7 @@ function buildDailyCompare(data) {
 
   // ── dcOpenRouteModal — แสดง Modal รายเที่ยวในเส้นทาง ────────────────
   function getOilPriceByDate(dateStr) {
-    const op = OIL_PRICE_DATA || null;
+    const op = (typeof OIL_PRICE_DATA !== 'undefined') ? OIL_PRICE_DATA : null;
     if (!op || !op.prices || !dateStr) return null;
     // หาราคาล่าสุดที่มีวัน <= dateStr (ราคามีผลจนถึงวันที่เปลี่ยนครั้งต่อไป)
     const sorted = [...op.prices].sort((a, b) => String(a.period_no).localeCompare(String(b.period_no)));
@@ -2034,14 +1870,12 @@ function buildDailyCompare(data) {
       const cards = `<div class="dc-compare-grid"><div style="min-width:0">${renderCard(_stA, 'a', _labelA)}</div><div style="min-width:0">${renderCard(_stB, 'b', _labelB)}</div></div>`;
       const diff = renderDiff(_stA, _stB);
       const qfBar = renderQFBar();
-      let tblResult = { html: '', allStatuses: [] };
-      if (_viewMode === 'unmatched_a') tblResult = renderUnmatchedTable(_stA, _stB, 'a');
-      else if (_viewMode === 'unmatched_b') tblResult = renderUnmatchedTable(_stA, _stB, 'b');
-      else tblResult = renderAnomalyTable(_stA, _stB);
-      const statusFilter = renderCompareStatusFilter(tblResult.allStatuses);
-      result.innerHTML = cards + diff + qfBar + statusFilter + tblResult.html;
+      let tbl = '';
+      if (_viewMode === 'unmatched_a') tbl = renderUnmatchedTable(_stA, _stB, 'a');
+      else if (_viewMode === 'unmatched_b') tbl = renderUnmatchedTable(_stA, _stB, 'b');
+      else tbl = renderAnomalyTable(_stA, _stB);
+      result.innerHTML = cards + diff + qfBar + tbl;
       bindQFEvents();
-      window.applyCompareFilter();
       dcAnimateSections();
     }
 
@@ -2052,35 +1886,6 @@ function buildDailyCompare(data) {
         setTimeout(() => el.classList.add('visible'), i * 80);
       });
     }
-
-    window.toggleCompareFilterAll = function(isChecked) {
-      document.querySelectorAll('.compare-filter-cb').forEach(cb => cb.checked = isChecked);
-      window.applyCompareFilter();
-    };
-
-    window.applyCompareFilter = function() {
-      const cbs = document.querySelectorAll('.compare-filter-cb');
-      const activeStatuses = Array.from(cbs).filter(cb => cb.checked).map(cb => cb.value);
-      const allCb = document.getElementById('compare-filter-all');
-      if (allCb) allCb.checked = (activeStatuses.length === cbs.length);
-      const rows = document.querySelectorAll('#dc_result tr[data-status]');
-      rows.forEach(row => {
-        if (activeStatuses.length === 0) {
-          row.style.display = 'none';
-        } else {
-          const stList = row.getAttribute('data-status').split(',');
-          const hasMatch = stList.some(s => activeStatuses.includes(s));
-          row.style.display = hasMatch ? '' : 'none';
-        }
-      });
-      document.querySelectorAll('.dc-compare-card').forEach(card => {
-        const visibleRows = card.querySelectorAll('tr[data-status]');
-        const hasVisible = Array.from(visibleRows).some(r => r.style.display !== 'none');
-        const hasRows = visibleRows.length > 0;
-        if (hasRows && !hasVisible) card.style.display = 'none';
-        else card.style.display = '';
-      });
-    };
     
     function renderSingleTable(stA) {
       if (!stA || !stA.routes || stA.routes.length === 0) {
@@ -2310,52 +2115,20 @@ function buildDailyCompare(data) {
     };
 
     function renderQFBar() {
-      const btnBase = 'border:1px solid rgba(255,255,255,.08);border-radius:10px;padding:8px 16px;font-size:11.5px;font-weight:700;font-family:inherit;cursor:pointer;transition:all .2s;white-space:nowrap;';
-      const activeGrad = 'background:linear-gradient(135deg,#ef4444,#dc2626);color:#fff;border-color:transparent;box-shadow:0 4px 14px rgba(239,68,68,.4);';
-      const inactive = 'background:rgba(255,255,255,.04);color:#94a3b8;border-color:rgba(255,255,255,.06);';
-      const aA = _viewMode === 'anomaly' ? activeGrad : inactive;
-      const aUA = _viewMode === 'unmatched_a' ? activeGrad : inactive;
-      const aUB = _viewMode === 'unmatched_b' ? activeGrad : inactive;
-      return `<div style="position:relative;margin:16px 0;background:linear-gradient(135deg, rgba(15,23,42,.9) 0%, rgba(26,29,39,.9) 100%);padding:18px 20px;border-radius:14px;border:1px solid rgba(59,130,246,.12);overflow:hidden;box-shadow:0 8px 32px rgba(0,0,0,.2);">
-        <div style="position:absolute;top:0;left:0;width:100%;height:1px;background:linear-gradient(90deg,transparent,rgba(59,130,246,.3),rgba(99,102,241,.3),transparent)"></div>
-        <div style="display:flex;align-items:center;gap:10px;margin-bottom:14px">
-          <div style="display:flex;align-items:center;justify-content:center;width:28px;height:28px;border-radius:8px;background:linear-gradient(135deg,rgba(59,130,246,.15),rgba(99,102,241,.15));border:1px solid rgba(59,130,246,.2)">
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#93c5fd" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polygon points="22 3 2 3 10 12.46 10 19 14 21 14 12.46 22 3"></polygon></svg>
-          </div>
-          <div style="font-size:12px;font-weight:800;color:#e2e8f0;letter-spacing:.3px;font-family:'Segoe UI',system-ui,sans-serif">Quick Filter</div>
-          <div style="flex:1;height:1px;background:linear-gradient(90deg,rgba(59,130,246,.15),transparent)"></div>
+      const btn = 'border:none;border-radius:20px;padding:8px 18px;font-size:12px;font-weight:700;font-family:inherit;cursor:pointer;transition:all .2s;';
+      const aA = _viewMode === 'anomaly' ? 'background:#ef4444;color:#fff;box-shadow:0 4px 14px rgba(239,68,68,.4);' : 'background:rgba(255,255,255,.06);color:var(--muted);';
+      const aUA = _viewMode === 'unmatched_a' ? 'background:#ef4444;color:#fff;box-shadow:0 4px 14px rgba(239,68,68,.4);' : 'background:rgba(255,255,255,.06);color:var(--muted);';
+      const aUB = _viewMode === 'unmatched_b' ? 'background:#ef4444;color:#fff;box-shadow:0 4px 14px rgba(239,68,68,.4);' : 'background:rgba(255,255,255,.06);color:var(--muted);';
+      return `<div style="display:flex;flex-direction:column;gap:12px;margin:16px 0;background:var(--card);padding:16px;border-radius:12px;border:1px solid var(--border);">
+        <div style="font-size:11px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;margin-bottom:-4px;">Quick Filter:</div>
+        <div style="display:flex;align-items:center;gap:12px;justify-content:flex-start;flex-wrap:wrap;">
+          <button id="qf_anomaly" style="${btn}${aA}">ตรวจหาความผิดปกติรายเส้นทาง</button>
         </div>
-        <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
-          <button id="qf_anomaly" style="${btnBase}${aA}">ตรวจหาความผิดปกติรายเส้นทาง</button>
-          <button id="qf_unmatched_a" style="${btnBase}${aUA}">ไม่ถูกเปรียบเทียบ : ${_labelA}</button>
-          <button id="qf_unmatched_b" style="${btnBase}${aUB}">ไม่ถูกเปรียบเทียบ : ${_labelB}</button>
+        <div style="display:flex;align-items:center;gap:12px;justify-content:flex-start;flex-wrap:wrap;">
+          <button id="qf_unmatched_a" style="${btn}${aUA}">ตรวจหาความผิดปกติรายเส้นทาง (รายเส้นทางที่ไม่ถูกเปรียบเทียบ : ${_labelA})</button>
+          <button id="qf_unmatched_b" style="${btn}${aUB}">ตรวจหาความผิดปกติรายเส้นทาง (รายเส้นทางที่ไม่ถูกเปรียบเทียบ : ${_labelB})</button>
         </div>
       </div>`;
-    }
-
-    function renderCompareStatusFilter(statuses) {
-      if (!statuses || statuses.length === 0) return '';
-      const statusOrder = { 'ขาดทุน': 1, 'สำรองน้ำมัน>50%': 2, 'ราคาจ่ายแพงกว่าเดิม': 3, 'สำรองน้ำมันแพงกว่าเดิม': 4, 'ราคารับต่ำกว่าเดิม': 5, 'ปกติ': 99 };
-      const sorted = [...statuses].sort((a, b) => (statusOrder[a] || 999) - (statusOrder[b] || 999));
-      const filterOpts = sorted.map(s => `
-        <label style="display:flex;align-items:center;gap:4px;cursor:pointer;font-size:11px;color:var(--text)">
-          <input type="checkbox" value="${esc(s)}" class="compare-filter-cb" checked onchange="window.applyCompareFilter()" style="accent-color:var(--accent);cursor:pointer;width:12px;height:12px;margin:0">
-          ${esc(s)}
-        </label>
-      `).join('');
-      return `
-        <div style="background:var(--card);border:1px solid var(--border);border-radius:12px;padding:12px 16px;margin:12px 0;display:flex;align-items:center;gap:12px;flex-wrap:wrap">
-          <span style="font-size:10px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;white-space:nowrap">กรองสถานะ:</span>
-          <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
-            <label style="display:flex;align-items:center;gap:4px;cursor:pointer;font-size:11px;color:var(--text);font-weight:700">
-              <input type="checkbox" id="compare-filter-all" checked onchange="window.toggleCompareFilterAll(this.checked)" style="accent-color:var(--accent);cursor:pointer;width:12px;height:12px;margin:0">
-              ดูทั้งหมด
-            </label>
-            <div style="width:1px;height:12px;background:var(--border)"></div>
-            ${filterOpts}
-          </div>
-        </div>
-      `;
     }
 
     function bindQFEvents() {
@@ -2448,8 +2221,8 @@ function buildDailyCompare(data) {
       const rowsB = (stB?.rows || []).filter(r => isValidDriver(r.driver));
       const colorMap = { red: '#ef4444', orange: '#f97316', purple: '#a855f7', blue: '#3b82f6', green: '#10b981' };
       const badge = (msg, lvl) => `<span style="display:inline-block;margin:1px 2px 1px 0;padding:2px 7px;border-radius:4px;font-size:10px;font-weight:600;background:${colorMap[lvl] || 'var(--' + lvl + ')'};color:#fff;white-space:nowrap">${msg}</span>`;
-      const thA = (t, al = 'right') => `<th style="padding:5px 9px;text-align:${al};font-size:10px;font-weight:700;color:#60a5fa;text-transform:uppercase;letter-spacing:.4px;white-space:nowrap;background:rgba(59,130,246,.15);border-bottom:1px solid rgba(59,130,246,.3);text-shadow:0 1px 2px rgba(0,0,0,.3)">${t}</th>`;
-      const thB = (t, al = 'right') => `<th style="padding:5px 9px;text-align:${al};font-size:10px;font-weight:700;color:#c4b5fd;text-transform:uppercase;letter-spacing:.4px;white-space:nowrap;background:rgba(99,102,241,.15);border-bottom:1px solid rgba(99,102,241,.3);text-shadow:0 1px 2px rgba(0,0,0,.3)">${t}</th>`;
+      const thA = (t, al = 'right') => `<th style="padding:5px 9px;text-align:${al};font-size:10px;font-weight:700;color:var(--accent);text-transform:uppercase;letter-spacing:.4px;white-space:nowrap;background:rgba(59,130,246,.06);border-bottom:1px solid var(--border)">${t}</th>`;
+      const thB = (t, al = 'right') => `<th style="padding:5px 9px;text-align:${al};font-size:10px;font-weight:700;color:#818cf8;text-transform:uppercase;letter-spacing:.4px;white-space:nowrap;background:rgba(99,102,241,.06);border-bottom:1px solid var(--border)">${t}</th>`;
       const thSep = `<th style="width:2px;padding:0;background:var(--border);border-bottom:1px solid var(--border)"></th>`;
       const tdSep = `<td style="width:2px;padding:0;background:var(--border)"></td>`;
       // Group by route key
@@ -2499,45 +2272,18 @@ function buildDailyCompare(data) {
           const dB = shortD(rb.date);
 
           const flags = [];
-          const statusTexts = [];
-          if ((ra.margin || 0) < 0) {
-            const lp = ra.recv > 0 ? Math.abs((ra.margin || 0) / ra.recv * 100) : 0;
-            flags.push(badge(`${dA} ขาดทุน ${lp.toFixed(0)}%`, 'red'));
-            statusTexts.push('ขาดทุน');
-          }
-          if ((rb.margin || 0) < 0) {
-            const lp = rb.recv > 0 ? Math.abs((rb.margin || 0) / rb.recv * 100) : 0;
-            flags.push(badge(`${dB} ขาดทุน ${lp.toFixed(0)}%`, 'red'));
-            statusTexts.push('ขาดทุน');
-          }
+          if ((ra.margin || 0) < 0) { const lp = ra.recv > 0 ? Math.abs((ra.margin || 0) / ra.recv * 100) : 0; flags.push(badge(`${dA} ขาดทุน ${lp.toFixed(0)}%`, 'red')); }
+          if ((rb.margin || 0) < 0) { const lp = rb.recv > 0 ? Math.abs((rb.margin || 0) / rb.recv * 100) : 0; flags.push(badge(`${dB} ขาดทุน ${lp.toFixed(0)}%`, 'red')); }
           
-          if ((ra.oil || 0) > (ra.pay || 0) * 0.5 && (ra.pay || 0) > 0) {
-            flags.push(badge(`${dA} สำรองน้ำมัน>50%`, 'orange'));
-            statusTexts.push('สำรองน้ำมัน>50%');
-          }
-          if ((rb.oil || 0) > (rb.pay || 0) * 0.5 && (rb.pay || 0) > 0) {
-            flags.push(badge(`${dB} สำรองน้ำมัน>50%`, 'orange'));
-            statusTexts.push('สำรองน้ำมัน>50%');
-          }
+          if ((ra.oil || 0) > (ra.pay || 0) * 0.5 && (ra.pay || 0) > 0) flags.push(badge(`${dA} สำรองน้ำมัน>50%`, 'orange'));
+          if ((rb.oil || 0) > (rb.pay || 0) * 0.5 && (rb.pay || 0) > 0) flags.push(badge(`${dB} สำรองน้ำมัน>50%`, 'orange'));
           
-          if (rb.pay > 0 && (ra.pay || 0) > rb.pay * 1.05) {
-            flags.push(badge(`${dA} ราคาจ่ายแพงกว่าเดิม`, 'purple'));
-            statusTexts.push('ราคาจ่ายแพงกว่าเดิม');
-          }
-          if (rb.oil > 0 && (ra.oil || 0) > rb.oil * 1.05) {
-            flags.push(badge(`${dA} สำรองน้ำมันแพงกว่าเดิม`, 'orange'));
-            statusTexts.push('สำรองน้ำมันแพงกว่าเดิม');
-          }
-          if (rb.recv > 0 && (ra.recv || 0) < rb.recv * 0.95) {
-            flags.push(badge(`${dA} ราคารับต่ำกว่าเดิม`, 'blue'));
-            statusTexts.push('ราคารับต่ำกว่าเดิม');
-          }
+          if (rb.pay > 0 && (ra.pay || 0) > rb.pay * 1.05) flags.push(badge(`${dA} ราคาจ่ายแพงกว่าเดิม`, 'purple'));
+          if (rb.oil > 0 && (ra.oil || 0) > rb.oil * 1.05) flags.push(badge(`${dA} สำรองน้ำมันแพงกว่าเดิม`, 'orange'));
+          if (rb.recv > 0 && (ra.recv || 0) < rb.recv * 0.95) flags.push(badge(`${dA} ราคารับต่ำกว่าเดิม`, 'blue'));
 
-          if (flags.length === 0) {
-            flags.push(`<span style="display:inline-block;padding:3px 8px;border-radius:6px;background:rgba(16,185,129,.15);color:#10b981;font-size:10px;font-weight:700">ปกติ</span>`);
-            statusTexts.push('ปกติ');
-          }
-          anomRows.push({ ra, rb, flags, statusTexts });
+          if (flags.length === 0) flags.push(`<span style="display:inline-block;padding:3px 8px;border-radius:6px;background:rgba(16,185,129,.15);color:#10b981;font-size:10px;font-weight:700">ปกติ</span>`);
+          anomRows.push({ ra, rb, flags });
         });
 
         const anomCount = anomRows.filter(r => r.flags.some(f => !f.includes('ปกติ'))).length;
@@ -2584,7 +2330,7 @@ function buildDailyCompare(data) {
         const bSum = mTripsB.reduce((s, r) => ({ recv: s.recv + (r.recv || 0), pay: s.pay + (r.pay || 0), oil: s.oil + (r.oil || 0), margin: s.margin + (r.margin || 0) }), { recv: 0, pay: 0, oil: 0, margin: 0 });
 
         let tripRows = '';
-        anomRows.forEach(({ ra, rb, flags, statusTexts }, i) => {
+        anomRows.forEach(({ ra, rb, flags }, i) => {
           const isNormal = flags.length === 1 && flags[0].includes('ปกติ');
           const bgHighlight = isNormal ? 'rgba(16, 185, 129, 0.05)' : 'transparent';
           const bg = isNormal ? `background:${bgHighlight}` : (i % 2 ? 'background:rgba(255,255,255,.02)' : '');
@@ -2595,7 +2341,7 @@ function buildDailyCompare(data) {
           const bOilPct = rb && rb.pay > 0 ? (rb.oil || 0) / rb.pay * 100 : 0, bOilWarn = bOilPct > 50;
           const bOilCell = rb && rb.oil > 0 ? `<span style="${bOilWarn ? 'color:var(--orange);font-weight:700' : ''}">${fmt(rb.oil)}${bOilWarn ? ` <span style="font-size:9px;background:var(--orange);color:#fff;padding:1px 4px;border-radius:3px">${bOilPct.toFixed(0)}%</span>` : ''}</span>` : `<span style="color:var(--muted)">-</span>`;
 
-          tripRows += `<tr data-status="${esc(statusTexts.join(','))}" style="${bg};transition:background .15s" onmouseover="this.style.background='rgba(59,130,246,.06)'" onmouseout="this.style.background='${bgHighlight}'">
+          tripRows += `<tr style="${bg};transition:background .15s" onmouseover="this.style.background='rgba(59,130,246,.06)'" onmouseout="this.style.background='${bgHighlight}'">
             <td style="padding:6px 9px;font-weight:600;color:${ra ? 'var(--text)' : 'var(--muted)'}">${ra ? esc(ra.driver || '-') : '<span style="font-size:10px">ไม่มีข้อมูลช่วง A</span>'}</td>
             <td style="padding:6px 9px">${aOilCell}</td>
             <td style="padding:6px 9px;text-align:right">${ra ? fmt(ra.recv) : '<span style="color:var(--muted)">-</span>'}</td>
@@ -2612,13 +2358,13 @@ function buildDailyCompare(data) {
         });
 
         const sumRow = `<tr style="border-top:2px solid var(--border);background:rgba(255,255,255,.025)">
-          <td style="padding:8px 9px;font-weight:700;font-size:11.5px;color:#60a5fa">รวม ${mTripsA.length} เที่ยว</td>
+          <td style="padding:8px 9px;font-weight:700;font-size:11.5px;color:var(--accent)">รวม ${mTripsA.length} เที่ยว</td>
           <td style="padding:8px 9px;font-size:11.5px;color:var(--orange)">${fmt(aSum.oil)}</td>
           <td style="padding:8px 9px;text-align:right;font-size:11.5px">${fmt(aSum.recv)}</td>
           <td style="padding:8px 9px;text-align:right;font-size:11.5px">${aSum.pay > 0 ? fmt(aSum.pay) : '-'}</td>
           <td style="padding:8px 9px;text-align:right;font-weight:700;font-size:11.5px;color:${aSum.margin >= 0 ? 'var(--green)' : 'var(--red)'}">${fmt(aSum.margin)}</td>
           ${tdSep}
-          <td style="padding:8px 9px;font-weight:700;font-size:11.5px;color:#c4b5fd">รวม ${mTripsB.length} เที่ยว</td>
+          <td style="padding:8px 9px;font-weight:700;font-size:11.5px;color:#818cf8">รวม ${mTripsB.length} เที่ยว</td>
           <td style="padding:8px 9px;font-size:11.5px;color:var(--orange)">${fmt(bSum.oil)}</td>
           <td style="padding:8px 9px;text-align:right;font-size:11.5px">${fmt(bSum.recv)}</td>
           <td style="padding:8px 9px;text-align:right;font-size:11.5px">${bSum.pay > 0 ? fmt(bSum.pay) : '-'}</td>
@@ -2626,30 +2372,15 @@ function buildDailyCompare(data) {
           <td></td>
         </tr>`;
 
-        const _custLabel = esc(ga.customer || '-');
-        const _vtypeLabel = esc(ga.vtype || '-');
-        const _routeLabel = esc(ga.route || '-');
-        html += `<div class="dc-compare-card" style="background:var(--card);border:1px solid var(--border);border-radius:12px;margin-bottom:16px;overflow:hidden;cursor:pointer;transition:border-color .2s" onmouseover="this.style.borderColor='var(--accent)'" onmouseout="this.style.borderColor='var(--border)'" onclick="dcOpenAnomalyModal(${cIdx})">
-          <div style="background:linear-gradient(135deg, rgba(15,23,42,.95) 0%, rgba(30,41,59,.95) 100%);padding:12px 16px;border-bottom:1px solid var(--border);display:flex;flex-wrap:wrap;align-items:center;gap:12px;position:relative;overflow:hidden">
-            <div style="position:absolute;top:0;left:0;width:4px;height:100%;background:linear-gradient(180deg,var(--accent),#818cf8)"></div>
-            <div style="flex:1;min-width:200px;display:flex;flex-direction:column;gap:6px">
-              <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
-                <span style="display:inline-flex;align-items:center;gap:4px;background:rgba(59,130,246,.12);color:#93c5fd;font-size:10px;font-weight:700;padding:3px 10px;border-radius:20px;text-transform:uppercase;letter-spacing:.8px;border:1px solid rgba(59,130,246,.18)">${_custLabel}</span>
-                <span style="display:inline-flex;align-items:center;gap:4px;background:rgba(99,102,241,.12);color:#c4b5fd;font-size:10px;font-weight:700;padding:3px 10px;border-radius:20px;text-transform:uppercase;letter-spacing:.8px;border:1px solid rgba(99,102,241,.18)">${_vtypeLabel}</span>
-              </div>
-              <div style="font-size:14px;font-weight:800;color:#64748b;letter-spacing:-.3px;font-family:'Segoe UI',system-ui,sans-serif">${_routeLabel}</div>
+        html += `<div style="background:var(--card);border:1px solid var(--border);border-radius:12px;margin-bottom:16px;overflow:hidden;cursor:pointer;transition:border-color .2s" onmouseover="this.style.borderColor='var(--accent)'" onmouseout="this.style.borderColor='var(--border)'" onclick="dcOpenAnomalyModal(${cIdx})">
+          <div style="background:var(--surface);padding:10px 14px;border-bottom:1px solid var(--border);display:flex;flex-wrap:wrap;align-items:center;gap:12px">
+            <div style="flex:1;min-width:180px">
+              <div style="font-size:10px;color:var(--muted);font-weight:700;text-transform:uppercase;letter-spacing:.5px">${esc(ga.customer || '-')} · ${esc(ga.vtype || '-')}</div>
+              <div style="font-size:13px;font-weight:700;color:var(--accent);margin-top:2px">${esc(ga.route || '-')}</div>
             </div>
-            <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap">
-              <div style="display:inline-flex;align-items:center;gap:5px;background:rgba(15,23,42,.6);border:1px solid rgba(59,130,246,.25);border-radius:8px;padding:5px 10px">
-                <span style="font-size:9px;color:#93c5fd;font-weight:700;letter-spacing:.5px">${esc(_labelA)}</span>
-                <span style="font-size:10px;color:#64748b">|</span>
-                <span style="font-size:11px;font-weight:700;color:#e2e8f0;font-family:'Segoe UI',system-ui,sans-serif">${mTripsA.length}<span style="font-size:8px;color:#94a3b8;font-weight:500;margin-left:2px">เที่ยว</span></span>
-              </div>
-              <div style="display:inline-flex;align-items:center;gap:5px;background:rgba(15,23,42,.6);border:1px solid rgba(99,102,241,.25);border-radius:8px;padding:5px 10px">
-                <span style="font-size:9px;color:#c4b5fd;font-weight:700;letter-spacing:.5px">${esc(_labelB)}</span>
-                <span style="font-size:10px;color:#64748b">|</span>
-                <span style="font-size:11px;font-weight:700;color:#e2e8f0;font-family:'Segoe UI',system-ui,sans-serif">${mTripsB.length}<span style="font-size:8px;color:#94a3b8;font-weight:500;margin-left:2px">เที่ยว</span></span>
-              </div>
+            <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+              <span style="font-size:11px;background:rgba(59,130,246,.12);padding:2px 8px;border-radius:6px">${esc(_labelA)}: <b style="color:var(--text)">${mTripsA.length} เที่ยว</b></span>
+              <span style="font-size:11px;background:rgba(99,102,241,.12);padding:2px 8px;border-radius:6px">${esc(_labelB)}: <b style="color:var(--text)">${mTripsB.length} เที่ยว</b></span>
             </div>
           </div>
           <div style="overflow-x:auto">
@@ -2657,16 +2388,16 @@ function buildDailyCompare(data) {
               <colgroup><col style="min-width:110px"><col style="width:90px"><col style="width:85px"><col style="width:85px"><col style="width:85px"><col style="width:2px"><col style="min-width:110px"><col style="width:90px"><col style="width:85px"><col style="width:85px"><col style="width:85px"><col style="min-width:230px"></colgroup>
               <thead>
                 <tr>
-                  <th colspan="5" style="padding:5px 9px;text-align:left;font-size:11px;font-weight:700;color:#60a5fa;background:rgba(59,130,246,.15);border-bottom:1px solid rgba(59,130,246,.3);text-shadow:0 1px 2px rgba(0,0,0,.3)">${esc(_labelA)}</th>
+                  <th colspan="5" style="padding:5px 9px;text-align:left;font-size:11px;font-weight:700;color:var(--accent);background:rgba(59,130,246,.06);border-bottom:1px solid var(--border)">${esc(_labelA)}</th>
                   ${thSep}
-                  <th colspan="5" style="padding:5px 9px;text-align:left;font-size:11px;font-weight:700;color:#c4b5fd;background:rgba(99,102,241,.15);border-bottom:1px solid rgba(99,102,241,.3);text-shadow:0 1px 2px rgba(0,0,0,.3)">${esc(_labelB)}</th>
-                  <th style="padding:5px 9px;background:rgba(99,102,241,.15);border-bottom:1px solid rgba(99,102,241,.3)"></th>
+                  <th colspan="5" style="padding:5px 9px;text-align:left;font-size:11px;font-weight:700;color:#818cf8;background:rgba(99,102,241,.06);border-bottom:1px solid var(--border)">${esc(_labelB)}</th>
+                  <th style="padding:5px 9px;background:rgba(99,102,241,.06);border-bottom:1px solid var(--border)"></th>
                 </tr>
                 <tr>
                   ${thA('พขร.', 'left')}${thA('สำรองน้ำมัน', 'left')}${thA('ราคารับ')}${thA('ราคาจ่าย')}${thA('ส่วนต่าง')}
                   ${thSep}
                   ${thB('พขร.', 'left')}${thB('สำรองน้ำมัน', 'left')}${thB('ราคารับ')}${thB('ราคาจ่าย')}${thB('ส่วนต่าง')}
-                  <th style="padding:5px 9px;font-size:10px;font-weight:700;color:#c4b5fd;text-transform:uppercase;letter-spacing:.4px;background:rgba(99,102,241,.15);border-bottom:1px solid rgba(99,102,241,.3);text-shadow:0 1px 2px rgba(0,0,0,.3)">สาเหตุความผิดปกติ</th>
+                  <th style="padding:5px 9px;font-size:10px;font-weight:700;color:var(--text);opacity:0.85;text-transform:uppercase;letter-spacing:.4px;background:rgba(99,102,241,.06);border-bottom:1px solid var(--border)">สาเหตุความผิดปกติ</th>
                 </tr>
               </thead>
               <tbody>${tripRows}${sumRow}</tbody>
@@ -2674,19 +2405,14 @@ function buildDailyCompare(data) {
           </div>
         </div>`;
       });
-      if (!totalRows) return { html: `<div class="table-card" style="margin-top:0"><div style="padding:48px;text-align:center;color:var(--green)">✅ ไม่พบความผิดปกติในช่วงเวลาที่เลือก</div></div>`, allStatuses: [] };
-      const allStatuses = new Set();
-      cardsData.forEach(card => card.anomRows.forEach(r => r.statusTexts.forEach(s => allStatuses.add(s))));
-      return {
-        html: `<div style="margin-top:0">
-          <div style="display:flex;align-items:center;flex-wrap:wrap;gap:8px;padding:11px 16px;background:var(--card);border:1px solid var(--border);border-radius:12px;margin-bottom:12px">
-            <h3 style="margin:0;font-size:14px">➢ สรุปผลการตรวจสอบรวม ${cardsData.length} เส้นทาง พบความผิดปกติ ${totalAnom} รายการ</h3>
-            <span style="font-size:11px;color:var(--muted)"></span>
-          </div>
-          ${html}
-        </div>`,
-        allStatuses: Array.from(allStatuses)
-      };
+      if (!totalRows) return `<div class="table-card" style="margin-top:0"><div style="padding:48px;text-align:center;color:var(--green)">✅ ไม่พบความผิดปกติในช่วงเวลาที่เลือก</div></div>`;
+      return `<div style="margin-top:0">
+        <div style="display:flex;align-items:center;flex-wrap:wrap;gap:8px;padding:11px 16px;background:var(--card);border:1px solid var(--border);border-radius:12px;margin-bottom:12px">
+          <h3 style="margin:0;font-size:14px">➢ สรุปผลการตรวจสอบรวม ${cardsData.length} เส้นทาง พบความผิดปกติ ${totalAnom} รายการ</h3>
+          <span style="font-size:11px;color:var(--muted)"></span>
+        </div>
+        ${html}
+      </div>`;
     }
 
     window.dcOpenAnomalyModal = function (idx) {
@@ -2699,8 +2425,8 @@ function buildDailyCompare(data) {
       modal.style = 'position:fixed;inset:0;background:rgba(0,0,0,.75);z-index:9999;display:flex;align-items:center;justify-content:center;padding:20px;backdrop-filter:blur(4px)';
       modal.onclick = e => { if (e.target === modal) modal.remove(); };
       
-      const thA = (t, al = 'right') => `<th style="padding:5px 4px;text-align:${al};font-size:10px;font-weight:700;color:#60a5fa;background:rgba(59,130,246,.15);border-bottom:1px solid rgba(59,130,246,.3);text-shadow:0 1px 2px rgba(0,0,0,.3)">${t}</th>`;
-      const thB = (t, al = 'right') => `<th style="padding:5px 4px;text-align:${al};font-size:10px;font-weight:700;color:#c4b5fd;background:rgba(99,102,241,.15);border-bottom:1px solid rgba(99,102,241,.3);text-shadow:0 1px 2px rgba(0,0,0,.3)">${t}</th>`;
+      const thA = (t, al = 'right') => `<th style="padding:5px 4px;text-align:${al};font-size:10px;font-weight:700;color:var(--accent);background:rgba(59,130,246,.06);border-bottom:1px solid var(--border)">${t}</th>`;
+      const thB = (t, al = 'right') => `<th style="padding:5px 4px;text-align:${al};font-size:10px;font-weight:700;color:#818cf8;background:rgba(99,102,241,.06);border-bottom:1px solid var(--border)">${t}</th>`;
       const thSep = `<th style="width:2px;padding:0;background:var(--border);border-bottom:1px solid var(--border)"></th>`;
       const tdSep = `<td style="width:2px;padding:0;background:var(--border)"></td>`;
       
@@ -2751,16 +2477,16 @@ function buildDailyCompare(data) {
             <table style="width:100%;min-width:max-content;border-collapse:collapse;font-size:11px">
               <thead style="position:sticky;top:0;z-index:5;background:var(--surface)">
                 <tr>
-                  <th colspan="8" style="padding:6px 4px;text-align:center;font-size:11px;font-weight:800;color:#60a5fa;background:rgba(59,130,246,.15);border-bottom:1px solid rgba(59,130,246,.3);text-shadow:0 1px 2px rgba(0,0,0,.3)">${_labelA}</th>
+                  <th colspan="8" style="padding:6px 4px;text-align:center;font-size:11px;font-weight:800;color:var(--accent);background:rgba(59,130,246,.06);border-bottom:1px solid var(--border)">${_labelA}</th>
                   ${thSep}
-                  <th colspan="8" style="padding:6px 4px;text-align:center;font-size:11px;font-weight:800;color:#c4b5fd;background:rgba(99,102,241,.15);border-bottom:1px solid rgba(99,102,241,.3);text-shadow:0 1px 2px rgba(0,0,0,.3)">${_labelB}</th>
-                  <th style="padding:6px 4px;background:rgba(99,102,241,.15);border-bottom:1px solid rgba(99,102,241,.3)"></th>
+                  <th colspan="8" style="padding:6px 4px;text-align:center;font-size:11px;font-weight:800;color:#818cf8;background:rgba(99,102,241,.06);border-bottom:1px solid var(--border)">${_labelB}</th>
+                  <th style="padding:6px 4px;background:rgba(99,102,241,.06);border-bottom:1px solid var(--border)"></th>
                 </tr>
                 <tr>
                   ${thA('วันที่','left')}${thA('พขร.','left')}${thA('รถ','left')}${thA('ทะเบียน','left')}${thA('น้ำมัน')}${thA('รับ')}${thA('จ่าย')}${thA('ส่วนต่าง')}
                   ${thSep}
                   ${thB('วันที่','left')}${thB('พขร.','left')}${thB('รถ','left')}${thB('ทะเบียน','left')}${thB('น้ำมัน')}${thB('รับ')}${thB('จ่าย')}${thB('ส่วนต่าง')}
-                  <th style="padding:5px 4px;font-size:10px;font-weight:700;color:#c4b5fd;background:rgba(99,102,241,.15);border-bottom:1px solid rgba(99,102,241,.3);text-shadow:0 1px 2px rgba(0,0,0,.3)">ความผิดปกติ</th>
+                  <th style="padding:5px 4px;font-size:10px;font-weight:700;color:var(--text);opacity:0.85;background:rgba(99,102,241,.06);border-bottom:1px solid var(--border)">ความผิดปกติ</th>
                 </tr>
               </thead>
               <tbody>${trs}</tbody>
@@ -2776,10 +2502,10 @@ function buildDailyCompare(data) {
       const opSt = isA ? stB : stA;
       const myLabel = isA ? _labelA : _labelB;
       
-      const themeColor = isA ? '#60a5fa' : '#c4b5fd';
-      const themeBg = isA ? 'rgba(59,130,246,.15)' : 'rgba(99,102,241,.15)';
-      const themeBadgeBg = isA ? 'rgba(59,130,246,.2)' : 'rgba(99,102,241,.2)';
-      const themeHover = isA ? 'rgba(59,130,246,.12)' : 'rgba(99,102,241,.12)';
+      const themeColor = isA ? 'var(--accent)' : '#818cf8';
+      const themeBg = isA ? 'rgba(59,130,246,.06)' : 'rgba(99,102,241,.06)';
+      const themeBadgeBg = isA ? 'rgba(59,130,246,.12)' : 'rgba(99,102,241,.12)';
+      const themeHover = isA ? 'rgba(59,130,246,.08)' : 'rgba(99,102,241,.08)';
       
       if (!mySt) return `<div style="padding:40px;text-align:center;color:var(--muted)">กรุณาเลือกช่วงเวลา</div>`;
       const isValidDriver = d => d && d.trim() !== '-' && !/^null$/i.test(d.trim()) && !/^nan$/i.test(d.trim());
@@ -2788,7 +2514,7 @@ function buildDailyCompare(data) {
       const opRows = (opSt?.rows || []).filter(r => isValidDriver(r.driver));
       
       const badge = (msg, lvl) => `<span style="display:inline-block;margin:1px 2px 1px 0;padding:2px 7px;border-radius:4px;font-size:10px;font-weight:600;background:var(--${lvl});color:#fff;white-space:nowrap">${msg}</span>`;
-      const thMy = (t, al = 'right') => `<th style="padding:5px 9px;text-align:${al};font-size:10px;font-weight:700;color:${themeColor};text-transform:uppercase;letter-spacing:.4px;white-space:nowrap;background:${themeBg};border-bottom:1px solid ${isA ? 'rgba(59,130,246,.3)' : 'rgba(99,102,241,.3)'};text-shadow:0 1px 2px rgba(0,0,0,.3)">${t}</th>`;
+      const thMy = (t, al = 'right') => `<th style="padding:5px 9px;text-align:${al};font-size:10px;font-weight:700;color:${themeColor};text-transform:uppercase;letter-spacing:.4px;white-space:nowrap;background:${themeBg};border-bottom:1px solid var(--border)">${t}</th>`;
       
       const myGroup = {}, opGroup = {};
       myRows.forEach(r => {
@@ -2827,22 +2553,11 @@ function buildDailyCompare(data) {
         const unRows = [];
         unmatched.forEach(ra => {
           const flags = [];
-          const statusTexts = [];
-          if ((ra.margin || 0) < 0) {
-            const lp = ra.recv > 0 ? Math.abs((ra.margin || 0) / ra.recv * 100) : 0;
-            flags.push(badge(`ขาดทุน ${lp.toFixed(0)}%`, 'red'));
-            statusTexts.push('ขาดทุน');
-          }
-          if ((ra.oil || 0) > (ra.pay || 0) * 0.5 && (ra.pay || 0) > 0) {
-            flags.push(badge('สำรองน้ำมัน>50%', 'orange'));
-            statusTexts.push('สำรองน้ำมัน>50%');
-          }
+          if ((ra.margin || 0) < 0) { const lp = ra.recv > 0 ? Math.abs((ra.margin || 0) / ra.recv * 100) : 0; flags.push(badge(`ขาดทุน ${lp.toFixed(0)}%`, 'red')); }
+          if ((ra.oil || 0) > (ra.pay || 0) * 0.5 && (ra.pay || 0) > 0) flags.push(badge('สำรองน้ำมัน>50%', 'orange'));
           
-          if (flags.length === 0) {
-            flags.push(`<span style="display:inline-block;padding:3px 8px;border-radius:6px;background:rgba(16,185,129,.15);color:#10b981;font-size:10px;font-weight:700">ปกติ</span>`);
-            statusTexts.push('ปกติ');
-          }
-          unRows.push({ ra, flags, statusTexts });
+          if (flags.length === 0) flags.push(`<span style="display:inline-block;padding:3px 8px;border-radius:6px;background:rgba(16,185,129,.15);color:#10b981;font-size:10px;font-weight:700">ปกติ</span>`);
+          unRows.push({ ra, flags });
         });
         
         const anomCount = unRows.filter(r => r.flags.some(f => !f.includes('ปกติ'))).length;
@@ -2879,7 +2594,7 @@ function buildDailyCompare(data) {
         const mySum = mTrips.reduce((s, r) => ({ recv: s.recv + (r.recv || 0), pay: s.pay + (r.pay || 0), oil: s.oil + (r.oil || 0), margin: s.margin + (r.margin || 0) }), { recv: 0, pay: 0, oil: 0, margin: 0 });
         
         let tripRows = '';
-        unRows.forEach(({ ra, flags, statusTexts }, i) => {
+        unRows.forEach(({ ra, flags }, i) => {
           const isNormal = flags.length === 1 && flags[0].includes('ปกติ');
           const bgHighlight = isNormal ? 'rgba(16, 185, 129, 0.05)' : 'transparent';
           const bg = isNormal ? `background:${bgHighlight}` : (i % 2 ? 'background:rgba(255,255,255,.02)' : '');
@@ -2887,7 +2602,7 @@ function buildDailyCompare(data) {
           const aOilPct = ra && ra.pay > 0 ? (ra.oil || 0) / ra.pay * 100 : 0, aOilWarn = aOilPct > 50;
           const aOilCell = ra && ra.oil > 0 ? `<span style="${aOilWarn ? 'color:var(--orange);font-weight:700' : ''}">${fmt(ra.oil)}${aOilWarn ? ` <span style="font-size:9px;background:var(--orange);color:#fff;padding:1px 4px;border-radius:3px">${aOilPct.toFixed(0)}%</span>` : ''}</span>` : `<span style="color:var(--muted)">-</span>`;
           
-          tripRows += `<tr data-status="${esc(statusTexts.join(','))}" style="${bg};transition:background .15s" onmouseover="this.style.background='${themeHover}'" onmouseout="this.style.background='${bgHighlight}'">
+          tripRows += `<tr style="${bg};transition:background .15s" onmouseover="this.style.background='${themeHover}'" onmouseout="this.style.background='${bgHighlight}'">
             <td style="padding:6px 9px;font-weight:600;color:var(--text)">${esc(ra.driver || '-')}</td>
             <td style="padding:6px 9px">${aOilCell}</td>
             <td style="padding:6px 9px;text-align:right">${fmt(ra.recv)}</td>
@@ -2898,7 +2613,7 @@ function buildDailyCompare(data) {
         });
         
         const sumRow = `<tr style="border-top:2px solid var(--border);background:rgba(255,255,255,.025)">
-          <td style="padding:8px 9px;font-weight:700;font-size:11.5px;color:${themeColor}">รวม ${mTrips.length} เที่ยว</td>
+          <td style="padding:8px 9px;font-weight:700;font-size:11.5px;color:var(--accent)">รวม ${mTrips.length} เที่ยว</td>
           <td style="padding:8px 9px;font-size:11.5px;color:var(--orange)">${fmt(mySum.oil)}</td>
           <td style="padding:8px 9px;text-align:right;font-size:11.5px">${fmt(mySum.recv)}</td>
           <td style="padding:8px 9px;text-align:right;font-size:11.5px">${mySum.pay > 0 ? fmt(mySum.pay) : '-'}</td>
@@ -2906,25 +2621,14 @@ function buildDailyCompare(data) {
           <td></td>
         </tr>`;
         
-        const _ucust = esc(ga.customer || '-');
-        const _uvtype = esc(ga.vtype || '-');
-        const _uroute = esc(ga.route || '-');
-        html += `<div class="dc-compare-card" style="background:var(--card);border:1px solid var(--border);border-radius:12px;margin-bottom:16px;overflow:hidden;cursor:pointer;transition:border-color .2s" onmouseover="this.style.borderColor='var(--accent)'" onmouseout="this.style.borderColor='var(--border)'" onclick="dcOpenUnmatchedModal(${cIdx}, '${side}')">
-          <div style="background:linear-gradient(135deg, rgba(15,23,42,.95) 0%, rgba(30,41,59,.95) 100%);padding:12px 16px;border-bottom:1px solid var(--border);display:flex;flex-wrap:wrap;align-items:center;gap:12px;position:relative;overflow:hidden">
-            <div style="position:absolute;top:0;left:0;width:4px;height:100%;background:linear-gradient(180deg,${themeColor},${isA ? '#818cf8' : '#3b82f6'})"></div>
-            <div style="flex:1;min-width:200px;display:flex;flex-direction:column;gap:6px">
-              <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
-                <span style="display:inline-flex;align-items:center;gap:4px;background:rgba(59,130,246,.12);color:#93c5fd;font-size:10px;font-weight:700;padding:3px 10px;border-radius:20px;text-transform:uppercase;letter-spacing:.8px;border:1px solid rgba(59,130,246,.18)">${_ucust}</span>
-                <span style="display:inline-flex;align-items:center;gap:4px;background:rgba(99,102,241,.12);color:#c4b5fd;font-size:10px;font-weight:700;padding:3px 10px;border-radius:20px;text-transform:uppercase;letter-spacing:.8px;border:1px solid rgba(99,102,241,.18)">${_uvtype}</span>
-              </div>
-              <div style="font-size:14px;font-weight:800;color:#64748b;letter-spacing:-.3px;font-family:'Segoe UI',system-ui,sans-serif">${_uroute}</div>
+        html += `<div style="background:var(--card);border:1px solid var(--border);border-radius:12px;margin-bottom:16px;overflow:hidden;cursor:pointer;transition:border-color .2s" onmouseover="this.style.borderColor='var(--accent)'" onmouseout="this.style.borderColor='var(--border)'" onclick="dcOpenUnmatchedModal(${cIdx}, '${side}')">
+          <div style="background:var(--surface);padding:10px 14px;border-bottom:1px solid var(--border);display:flex;flex-wrap:wrap;align-items:center;gap:12px">
+            <div style="flex:1;min-width:180px">
+              <div style="font-size:10px;color:var(--muted);font-weight:700;text-transform:uppercase;letter-spacing:.5px">${esc(ga.customer || '-')} · ${esc(ga.vtype || '-')}</div>
+              <div style="font-size:13px;font-weight:700;color:var(--accent);margin-top:2px">${esc(ga.route || '-')}</div>
             </div>
-            <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap">
-              <div style="display:inline-flex;align-items:center;gap:5px;background:rgba(15,23,42,.6);border:1px solid ${themeBg};border-radius:8px;padding:5px 10px">
-                <span style="font-size:9px;color:${themeColor};font-weight:700;letter-spacing:.5px">${esc(myLabel)}</span>
-                <span style="font-size:10px;color:#64748b">|</span>
-                <span style="font-size:11px;font-weight:700;color:#e2e8f0;font-family:'Segoe UI',system-ui,sans-serif">${mTrips.length}<span style="font-size:8px;color:#94a3b8;font-weight:500;margin-left:2px">เที่ยว</span></span>
-              </div>
+            <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+              <span style="font-size:11px;background:${themeBadgeBg};color:${themeColor};padding:2px 8px;border-radius:6px">${esc(myLabel)}: <b style="color:var(--text)">${mTrips.length} เที่ยว</b></span>
             </div>
           </div>
           <div style="overflow-x:auto">
@@ -2932,12 +2636,12 @@ function buildDailyCompare(data) {
               <colgroup><col style="min-width:110px"><col style="width:100px"><col style="width:90px"><col style="width:90px"><col style="width:90px"><col></colgroup>
               <thead>
                 <tr>
-                  <th colspan="5" style="padding:5px 9px;text-align:left;font-size:11px;font-weight:700;color:${themeColor};background:${themeBg};border-bottom:1px solid ${isA ? 'rgba(59,130,246,.3)' : 'rgba(99,102,241,.3)'};text-shadow:0 1px 2px rgba(0,0,0,.3)">${esc(myLabel)}</th>
-                  <th style="padding:5px 9px;background:rgba(99,102,241,.15);border-bottom:1px solid rgba(99,102,241,.3)"></th>
+                  <th colspan="5" style="padding:5px 9px;text-align:left;font-size:11px;font-weight:700;color:${themeColor};background:${themeBg};border-bottom:1px solid var(--border)">${esc(myLabel)}</th>
+                  <th style="padding:5px 9px;background:${themeBg};border-bottom:1px solid var(--border)"></th>
                 </tr>
                 <tr>
                   ${thMy('พขร.', 'left')}${thMy('สำรองน้ำมัน', 'left')}${thMy('ราคารับ')}${thMy('ราคาจ่าย')}${thMy('ส่วนต่าง')}
-                  <th style="padding:5px 9px;font-size:10px;font-weight:700;color:#c4b5fd;text-transform:uppercase;letter-spacing:.4px;background:rgba(99,102,241,.15);border-bottom:1px solid rgba(99,102,241,.3);text-shadow:0 1px 2px rgba(0,0,0,.3)">สาเหตุความผิดปกติ</th>
+                  <th style="padding:5px 9px;font-size:10px;font-weight:700;color:var(--text);opacity:0.85;text-transform:uppercase;letter-spacing:.4px;background:${themeBg};border-bottom:1px solid var(--border)">สาเหตุความผิดปกติ</th>
                 </tr>
               </thead>
               <tbody>${tripRows}${sumRow}</tbody>
@@ -2946,19 +2650,14 @@ function buildDailyCompare(data) {
         </div>`;
       });
       
-      if (!totalRows) return { html: `<div class="table-card" style="margin-top:0"><div style="padding:48px;text-align:center;color:var(--green)">✅ ไม่พบรายการเที่ยววิ่งที่จับคู่ไม่ได้ในหน้าต่างนี้</div></div>`, allStatuses: [] };
-      const allStatuses = new Set();
-      cardsData.forEach(card => card.unRows.forEach(r => r.statusTexts.forEach(s => allStatuses.add(s))));
-      return {
-        html: `<div style="margin-top:0">
-          <div style="display:flex;align-items:center;flex-wrap:wrap;gap:8px;padding:11px 16px;background:var(--card);border:1px solid var(--border);border-radius:12px;margin-bottom:12px">
-            <h3 style="margin:0;font-size:14px">➢ ข้อมูลที่ไม่ถูกเปรียบเทียบ: ${esc(myLabel)} (รวม ${cardsData.length} เส้นทาง / ${totalRows} เที่ยว)</h3>
-            ${totalAnom > 0 ? `<span style="font-size:11px;color:var(--red);background:rgba(239,68,68,.15);padding:2px 8px;border-radius:6px;font-weight:700">พบปัญหา ${totalAnom} เที่ยว</span>` : ''}
-          </div>
-          ${html}
-        </div>`,
-        allStatuses: Array.from(allStatuses)
-      };
+      if (!totalRows) return `<div class="table-card" style="margin-top:0"><div style="padding:48px;text-align:center;color:var(--green)">✅ ไม่พบรายการเที่ยววิ่งที่จับคู่ไม่ได้ในหน้าต่างนี้</div></div>`;
+      return `<div style="margin-top:0">
+        <div style="display:flex;align-items:center;flex-wrap:wrap;gap:8px;padding:11px 16px;background:var(--card);border:1px solid var(--border);border-radius:12px;margin-bottom:12px">
+          <h3 style="margin:0;font-size:14px">➢ ข้อมูลที่ไม่ถูกเปรียบเทียบ: ${esc(myLabel)} (รวม ${cardsData.length} เส้นทาง / ${totalRows} เที่ยว)</h3>
+          ${totalAnom > 0 ? `<span style="font-size:11px;color:var(--red);background:rgba(239,68,68,.15);padding:2px 8px;border-radius:6px;font-weight:700">พบปัญหา ${totalAnom} เที่ยว</span>` : ''}
+        </div>
+        ${html}
+      </div>`;
     }
 
     window.dcOpenUnmatchedModal = function (idx, side) {
@@ -2967,9 +2666,9 @@ function buildDailyCompare(data) {
       const isA = side === 'a';
       const myLabel = isA ? _labelA : _labelB;
       
-      const themeColor = isA ? '#60a5fa' : '#c4b5fd';
-      const themeBg = isA ? 'rgba(59,130,246,.15)' : 'rgba(99,102,241,.15)';
-      const themeBadgeBg = isA ? 'rgba(59,130,246,.2)' : 'rgba(99,102,241,.2)';
+      const themeColor = isA ? 'var(--accent)' : '#818cf8';
+      const themeBg = isA ? 'rgba(59,130,246,.06)' : 'rgba(99,102,241,.06)';
+      const themeBadgeBg = isA ? 'rgba(59,130,246,.12)' : 'rgba(99,102,241,.12)';
       
       const existing = document.getElementById('dc_unm_modal');
       if (existing) existing.remove();
@@ -2978,7 +2677,7 @@ function buildDailyCompare(data) {
       modal.style = 'position:fixed;inset:0;background:rgba(0,0,0,.75);z-index:9999;display:flex;align-items:center;justify-content:center;padding:20px;backdrop-filter:blur(4px)';
       modal.onclick = e => { if (e.target === modal) modal.remove(); };
       
-      const thMy = (t, al = 'right') => `<th style="padding:5px 6px;text-align:${al};font-size:10px;font-weight:700;color:${themeColor};background:${themeBg};border-bottom:1px solid ${isA ? 'rgba(59,130,246,.3)' : 'rgba(99,102,241,.3)'};text-shadow:0 1px 2px rgba(0,0,0,.3)">${t}</th>`;
+      const thMy = (t, al = 'right') => `<th style="padding:5px 6px;text-align:${al};font-size:10px;font-weight:700;color:${themeColor};background:${themeBg};border-bottom:1px solid var(--border)">${t}</th>`;
       
       let trs = '';
       card.unRows.forEach(({ ra, flags }, i) => {
@@ -3014,12 +2713,12 @@ function buildDailyCompare(data) {
             <table style="width:100%;border-collapse:collapse;font-size:11px">
               <thead style="position:sticky;top:0;z-index:5;background:var(--surface)">
                 <tr>
-                  <th colspan="8" style="padding:8px 6px;text-align:center;font-size:12px;font-weight:800;color:${themeColor};background:${themeBg};border-bottom:1px solid ${isA ? 'rgba(59,130,246,.3)' : 'rgba(99,102,241,.3)'};text-shadow:0 1px 2px rgba(0,0,0,.3)">ช่วง ${isA?'A':'B'}: ${esc(myLabel)}</th>
-                  <th style="padding:8px 6px;background:rgba(99,102,241,.15);border-bottom:1px solid rgba(99,102,241,.3)"></th>
+                  <th colspan="8" style="padding:8px 6px;text-align:center;font-size:12px;font-weight:800;color:${themeColor};background:${themeBg};border-bottom:1px solid var(--border)">ช่วง ${isA?'A':'B'}: ${esc(myLabel)}</th>
+                  <th style="padding:8px 6px;background:${themeBg};border-bottom:1px solid var(--border)"></th>
                 </tr>
                 <tr>
                   ${thMy('วันที่','left')}${thMy('พขร.','left')}${thMy('รถ','left')}${thMy('ทะเบียน','left')}${thMy('น้ำมัน')}${thMy('รับ')}${thMy('จ่าย')}${thMy('ส่วนต่าง')}
-                  <th style="padding:5px 6px;font-size:10px;font-weight:700;color:#c4b5fd;background:rgba(99,102,241,.15);border-bottom:1px solid rgba(99,102,241,.3);text-shadow:0 1px 2px rgba(0,0,0,.3)">ความผิดปกติ</th>
+                  <th style="padding:5px 6px;font-size:10px;font-weight:700;color:var(--text);opacity:0.85;background:${themeBg};border-bottom:1px solid var(--border)">ความผิดปกติ</th>
                 </tr>
               </thead>
               <tbody>${trs}</tbody>
@@ -3819,151 +3518,19 @@ function updateSidebarMeta() {
   if (el) el.textContent = `${label} | ${fmt(total)} เที่ยว`;
 }
 
-// --- GAS Data Fetching ---
-function lsSet(key, val) {
-  try { localStorage.setItem('gas_' + key, JSON.stringify(val)); } catch(e){}
-}
-function lsGet(key) {
-  try {
-    const raw = localStorage.getItem('gas_' + key);
-    return raw ? JSON.parse(raw) : null;
-  } catch(e) { return null; }
-}
-
-function loadSummary() {
-  return new Promise((resolve, reject) => {
-    google.script.run
-      .withSuccessHandler(res => {
-        if (res.error) reject(new Error(res.error));
-        else { lsSet('summary', res); resolve(res); }
-      })
-      .withFailureHandler(err => reject(err))
-      .getSummaryCache();
-  });
-}
-
-function loadTrips() {
-  return new Promise((resolve, reject) => {
-    google.script.run
-      .withSuccessHandler(res => {
-        if (res.error) reject(new Error(res.error));
-        else { lsSet('trips', res); resolve(res); }
-      })
-      .withFailureHandler(err => reject(err))
-      .getTripsCache();
-  });
-}
-
-function loadOilPrice() {
-  return new Promise((resolve, reject) => {
-    google.script.run
-      .withSuccessHandler(res => {
-        if (res.error) reject(new Error(res.error));
-        else { lsSet('oil', res); resolve(res); }
-      })
-      .withFailureHandler(err => reject(err))
-      .getOilPriceData();
-  });
-}
-
-async function init() {
-  const content = document.getElementById('content');
-  content.innerHTML = `
-    <div class="loading-screen">
-      <div class="loader-wrap">
-        <div class="loader-ring"></div>
-        <div class="loader-ring"></div>
-      </div>
-      <div class="loader-text">กำลังโหลดข้อมูล<span class="loader-dots"></span></div>
-      <div class="loader-sub" id="load-status">เริ่มต้น...</div>
-    </div>
-    <div style="padding:0 24px 24px;">
-      <div class="skeleton-grid">
-        <div class="skeleton-pulse"></div>
-        <div class="skeleton-pulse"></div>
-        <div class="skeleton-pulse"></div>
-        <div class="skeleton-pulse"></div>
-      </div>
-      <div class="skeleton-pulse skeleton-card"></div>
-      <div class="skeleton-pulse skeleton-row"></div>
-      <div class="skeleton-pulse skeleton-row"></div>
-      <div class="skeleton-pulse skeleton-row"></div>
-    </div>
-  `;
-
-  const statusEl = document.getElementById('load-status');
-  const setStatus = (msg) => { if (statusEl) statusEl.textContent = msg; };
-  const errors = [];
-  const warnings = [];
-  const isGAS = typeof google !== 'undefined' && google.script && google.script.run;
-
-  // --- 1. Load Summary ---
-  setStatus('โหลดข้อมูลสรุป...');
-  let summary = null;
-  if (isGAS) {
-    try {
-      summary = await loadSummary();
-    } catch (err) {
-      errors.push('Summary: ' + err.message);
-      summary = lsGet('summary');
-      if (summary) warnings.push('ใช้ข้อมูลสรุปจาก cache');
-    }
-  } else {
-    // Local mode: use DATA_JSON from data.js
-    if (typeof DATA_JSON !== 'undefined') {
-      summary = DATA_JSON;
-      console.log('[init] Loaded summary from local DATA_JSON');
-    }
-  }
-
-  if (!summary) {
-    content.innerHTML = `<div class="kpi"><div class="kpi-value red">โหลดข้อมูลล้มเหลว</div><div style="margin-top:12px;color:#666;font-size:14px;">${esc(errors.join('; '))}</div><button onclick="location.reload()" style="margin-top:16px;padding:8px 16px;background:#3b82f6;color:#fff;border:none;border-radius:6px;cursor:pointer;">โหลดใหม่</button></div>`;
+function init() {
+  if (typeof DATA_JSON === 'undefined') {
+    document.getElementById('content').innerHTML = '<div class="kpi"><div class="kpi-value red">data.js not found</div></div>';
     return;
   }
-  DATA = summary;
+  DATA = DATA_JSON;
 
-  // --- 2. Load Trips ---
-  setStatus('โหลดข้อมูลเที่ยววิ่ง...');
-  let trips = { trips: [] };
-  if (isGAS) {
-    try {
-      trips = await loadTrips();
-    } catch (err) {
-      errors.push('Trips: ' + err.message);
-      const cachedTrips = lsGet('trips');
-      if (cachedTrips) { trips = cachedTrips; warnings.push('ใช้ข้อมูลเที่ยววิ่งจาก cache'); }
-    }
-  } else {
-    if (typeof FRAUD_DATA !== 'undefined') {
-      trips = { trips: FRAUD_DATA };
-      console.log('[init] Loaded trips from local FRAUD_DATA');
-    }
-  }
-  TRIPS_DATA = trips.trips || trips || [];
-
-  // --- 3. Load Oil Price (optional) ---
-  setStatus('โหลดราคาน้ำมัน...');
-  let oilPrice = null;
-  if (isGAS) {
-    try {
-      oilPrice = await loadOilPrice();
-    } catch (err) {
-      errors.push('Oil: ' + err.message);
-      const cachedOil = lsGet('oil');
-      if (cachedOil) { oilPrice = cachedOil; warnings.push('ใช้ราคาน้ำมันจาก cache'); }
-    }
-  } else {
-    if (typeof OIL_PRICE_DATA !== 'undefined' && OIL_PRICE_DATA) {
-      oilPrice = OIL_PRICE_DATA;
-      console.log('[init] Loaded oil price from local OIL_PRICE_DATA');
-    }
-  }
-  OIL_PRICE_DATA = oilPrice;
-
-  // Normalize customer aliases
+  // ── Normalize customer aliases across all data structures ──────────
+  // 1. Top-level customer array (used by Sections 3, 4, 5, 6, 7, 8, 9)
   if (Array.isArray(DATA.customers)) {
     DATA.customers.forEach(c => { c.name = mapCustomer(c.name); });
   }
+  // 2. Daily rows (used by Section 10 — daily comparison)
   if (Array.isArray(DATA.daily)) {
     DATA.daily.forEach(day => {
       if (Array.isArray(day.rows)) {
@@ -3971,23 +3538,14 @@ async function init() {
       }
     });
   }
-  if (Array.isArray(TRIPS_DATA)) {
-    TRIPS_DATA.forEach(r => { if(r.customer) r.customer = mapCustomer(r.customer); });
+  // 3. Fraud/transparency data
+  if (typeof FRAUD_DATA !== 'undefined' && Array.isArray(FRAUD_DATA)) {
+    FRAUD_DATA.forEach(r => { r.customer = mapCustomer(r.customer); });
   }
+  // ───────────────────────────────────────────────────────────────────
 
   updateSidebarMeta();
   initNav();
   showPage(0);
-  console.log('[init] Dashboard initialized successfully');
-
-  if (warnings.length > 0) {
-    console.warn('[init] Warnings:', warnings);
-    setTimeout(() => {
-      alert('แจ้งเตือน:\n' + warnings.join('\n') + '\n\nข้อมูลอาจไม่ล่าสุด กรุณารีเฟรชหรือกด "อัปเดท Dashboard ทั้งหมด" ใน Google Sheets');
-    }, 500);
-  }
-  if (errors.length > 0) {
-    console.error('[init] Errors (recovered):', errors);
-  }
 }
 init();
